@@ -33,24 +33,6 @@ class ImageCaptureNode(Node):
     def depth_callback(self, msg):
         pass
 
-    def crop_largest_purple_rectangle(self, pil_image):
-        frame = cv2.cvtColor(np.array(pil_image), cv2.COLOR_RGB2BGR)
-        hsv_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-        
-        lower_purple = np.array([0, 0, 0])
-        upper_purple = np.array([40, 40, 40])
-        purple_mask = cv2.inRange(hsv_frame, lower_purple, upper_purple)
-
-        contours, _ = cv2.findContours(purple_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if not contours:
-            return pil_image
-
-        largest_contour = max(contours, key=cv2.contourArea)
-        epsilon = 0.02 * cv2.arcLength(largest_contour, True)
-        approx = cv2.approxPolyDP(largest_contour, epsilon, True)
-        x, y, w, h = cv2.boundingRect(approx)
-        cropped_image = frame[y:y+h, x:x+w]
-        return Image.fromarray(cv2.cvtColor(cropped_image, cv2.COLOR_BGR2RGB))
 
     def process_image_find_digit(self, image, time):
         
@@ -76,10 +58,14 @@ class ImageCaptureNode(Node):
         largest_contour = max(contours, key=cv2.contourArea)
         x, y, w, h = cv2.boundingRect(largest_contour)
         cropped_image = image_np[y:y+h, x:x+w]
-        result = self.r.readtext(cropped_image, detail=0, allowlist='0123456789')
+        blurred_image = cv2.blur(cropped_image, (7, 7))
+        result = self.r.readtext(blurred_image, detail=0, allowlist='0123456789', mag_ratio=2)
         res = AIres()
-        res.num = str(result)
-        res.timestamp = time
+        if len(result) == 0:
+            res = None
+        else:
+            res.num = str(result)
+            res.timestamp = time
         return res
 
     def easyocr_callback(self, msg: CompressedImage):

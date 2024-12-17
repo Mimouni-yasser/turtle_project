@@ -17,6 +17,17 @@ import time
 
 import numpy as np
 import math
+from enum import Enum
+
+
+class IA_etat(Enum):
+    INIT = 0
+    DETECTION = 1
+    VERS_0 = 2
+    DETERMINER_DIR = 3
+    VERS_PRO = 4
+    FIN = 5
+    
 
 
 class TopicsEx2Node(Node):
@@ -28,6 +39,7 @@ class TopicsEx2Node(Node):
         self.i = 0
         
         self.num_array = dict()
+        list_num = list(self.num_array.keys())
 
         # create the Service Server object
         # defines the type, name, and callback function
@@ -51,6 +63,11 @@ class TopicsEx2Node(Node):
         self.vitesse_max = 0.5
                 
         self.range = 10.0  # éviter que le robot rentre en rotation au début
+        
+        self.current_digit = None
+        self.next_digit = None
+
+        self.range_arriere = 10.0  # éviter que le robot rentre en rotation au début
         self.yaw = 0.0
         self.yawav = 0.0
         self.roll = 0.0
@@ -65,15 +82,24 @@ class TopicsEx2Node(Node):
         self.condition_corrige = 0
         self.tableau_range = []
         
+
         self.mode = ''
         self.etatav = 0.0
         self.Nbr_image = 0.0
         
+        
         self.direction = 1.0
-
+        self.detected = list()
+        
+        
+        self.IA_etat = IA_etat.INIT
+        self.sorted_dict = dict()
         # Création d'un timer avec un callback toutes les 0.2 secondes
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
+
+        self.first_digit = None
+        self.total_time = 0.0
         # Abonnement au topic /scan pour recevoir les données de LaserScan
         self.subscriber = self.create_subscription(
             LaserScan,
@@ -98,49 +124,78 @@ class TopicsEx2Node(Node):
         )
 
     def AI_callback(self, msg):
-        self.get_logger().info("AI results: num: %s"%str(msg.num))
-        self.get_logger().info("AI results: timestamp: %f"%msg.timestamp)
-        if len(self.num_array.keys())<=10:
-            self.num_array[str(msg.num)] = msg.timestamp
-            self.get_logger().info("table %s"%str(self.num_array))
-        else:
-            self.get_logger().info("table %s"%str(self.num_array))
-            command = Twist()
-            command.linear.x = 0.0
-            command.angular.z = 0.0
-            self.publisher_.publish(command)
-            time.sleep(2)
-            list_num = list(self.num_array.keys())
-            list_num.sort()
-            self.all_found = True
+        if self.etat == 2.0:
+            cmd = Twist()
+            match self.IA_etat:
+                case IA_etat.INIT:
+                    pass
+                case IA_etat.DETECTION:
+                    if str(msg.num) == '[]':
+                        return
+                    self.num_array[str(msg.num)] = msg.timestamp
+                    if len(self.num_array.keys()) == 1:
+                        self.first_digit = str(msg.num)
+                    self.get_logger().info("table %s"%str(self.num_array))
+                    if len(self.num_array.keys()) == 8:
+                        self.sorted_dict = dict(sorted(self.num_array.items(), key=lambda item: item[1]))
+                        
+                        self.IA_etat = IA_etat.VERS_0
+                        
+                        pass
+                case IA_etat.VERS_0:
+                    self.list_num = list(self.num_array.keys())
+                    self.list_num.sort()
+                    self.determine_direction(self.sorted_dict[self.first_digit], self.sorted_dict["['0']"])
+                    
+                    if (msg.num == "['0']"):
+                        self.current_digit = "['0']"
+                        self.IA_etat = IA_etat.VERS_PRO
+                        cmd.linear.x = 0
+                        cmd.angular.z = 0
+                        self.publisher_.publish(cmd)
+                        time.sleep(3)
+                    pass
+                case IA_etat.DETERMINER_DIR:
+                    pass
+                case IA_etat.VERS_PRO:
+                    if msg.num == self.next_digit:
+                        #self.detected.append(msg.num)
+                        #TODO ajouter logique de detection
+                        self.current_digit = self.next_digit
+                        self.i+=1
+                        self.next_digit = f"['{self.i}']"
+                    self.determine_direction(self.num_array[self.current_digit], self.num_array[self.next_digit])
+                    if self.i == 9:
+                        self.IA_etat = IA_etat.FIN
+                    pass
+                case IA_etat.FIN:
+                    pass
+                case _:
+                    pass
             
-        if self.all_found:
-            self.current_digit = msg.num
-            self.determine_direction(self.num_array[self.current_digit], self.num_array[list_num[self.i]])
-            self.i += 1
             
             
     def determine_direction(self, P1, P2):
-        if (P1-P2) > 15 or (P2-P1 > 0 and P2-P1>-15):
+        if (P1-P2) > (self.total_time/2) or (P1-P2 < 0 and P1-P2> -(self.total_time/2)):
             self.direction = -1.0
         else:
             self.direction = 1.0
         
     def listener_callback(self, msg_sub):
-        # Récupération des distances des capteurs laser
+       # Récupération des distances des capteurs laser
         indice_rangeG = len(msg_sub.ranges) // 4
-        self.range = msg_sub.ranges[0]
+        indice_range_arriere = len(msg_sub.ranges) // 2
         indice_sup = int(indice_rangeG - self.degre_detection_direction)
-        indice_inf = int(indice_rangeG + self.degre_detection_direction)
-                
-        self.tableau_range = msg_sub.ranges
+        indice_inf = int(indice_rangeG + self.degre_detection_direction)                
         indice_rangeG_sup = int(indice_rangeG + self.degre_detection_rotation)
         indice_rangeG_inf = int(indice_rangeG - self.degre_detection_rotation)        
-        
+ 
+        self.range_arriere = msg_sub.ranges[indice_range_arriere]
+        self.range = msg_sub.ranges[0]
+        self.tableau_range = msg_sub.ranges        
         self.rangeG = msg_sub.ranges[indice_rangeG_inf:indice_rangeG_sup]        
         self.sup = msg_sub.ranges[indice_sup]
         self.inf = msg_sub.ranges[indice_inf]
-        
         self.get_logger().info('Range: "%s"\n' % str(self.range))
 
     def timer_callback(self):
@@ -156,7 +211,6 @@ class TopicsEx2Node(Node):
             self.condition_corrige = 4.71
         else:
             self.condition_corrige = 0
- 
         
         #remplacement des tableaux
         # Convertir en tableau NumPy si nécessaire
@@ -199,7 +253,10 @@ class TopicsEx2Node(Node):
         elif self.etat == 2.0:
             if (self.range < 0.3 and self.direction == 1) or (self.range_arriere < 0.3 and self.direction == -1):  # Présence d'un obstacle détecté
                 self.etat = 3.0
-                self.get_logger().info('Transition à l\'état 3 : rotation pour éviter l\'obstacle')   
+                self.get_logger().info('Transition à l\'état 3 : rotation pour éviter l\'obstacle')            
+                
+            elif self.image_detect() != []:
+                self.etat = 5.0
             
         elif self.etat == 3.0:
             if self.direction == 1.0: #si on va en marche avant
@@ -207,11 +264,13 @@ class TopicsEx2Node(Node):
             abs(self.yaw - self.yawav) <= self.condition_corrige and abs(self.yaw - self.yawav) >= 1.57 and self.condition_corrige == 4.71):
                     self.etat = 2.0
                     self.get_logger().info(f'Retour à l\'état 2 : rotation terminée, différence des yaw : {abs(self.yaw - self.yawav)}')
-
+                    
+                    
             elif self.direction == -1.0: #si on va en marche arrière
-                if (abs(self.yaw - self.yawav) >= 1.57 and self.condition_corrige == 0) or (abs(self.yaw - self.yawav) >= self.condition_corrige and abs(self.yaw - self.yawav) >= 1.57 and self.condition_corrige == 4.71):
+                if (abs(self.yaw - self.yawav) >= 1.57 and self.condition_corrige == 0) or (
+            abs(self.yaw - self.yawav) >= self.condition_corrige and abs(self.yaw - self.yawav) >= 1.57 and self.condition_corrige == 4.71):
                     self.etat = 2.0
-                    self.get_logger().info(f'Retour à l\'état 2 : rotation terminée, différence des yaw : {abs(self.yaw - self.yawav)}')
+                    self.get_logger().info(f'Retour à l\'état 2 : rotation terminée, différence des yaw : {abs(self.yaw - self.yawav)}')                    
             
         self.get_logger().info('Etape: "%s"\n' % str(self.etat))
         self.get_logger().info('Etape: "%s"\n' % str(self.condition_corrige))
@@ -233,15 +292,15 @@ class TopicsEx2Node(Node):
         elif self.etat == 2.0:
 
             if self.sup <= self.inf - self.tolerance:  # Je suis en train d'aller vers la gauche
-                msg.linear.x = 0.1 * self.direction
-                msg.angular.z = -abs(vitesse) 
+                msg.linear.x = 0.1*self.direction
+                msg.angular.z = -abs(vitesse)
                 self.get_logger().info("Je corrige vers la droite\n")
             elif self.sup >= self.inf + self.tolerance:  # Je suis en train d'aller vers la droite
-                msg.linear.x = 0.1 * self.direction
+                msg.linear.x = 0.1*self.direction
                 msg.angular.z = abs(vitesse)
                 self.get_logger().info("Je corrige vers la gauche\n")
             else:
-                msg.linear.x = 0.1 * self.direction
+                msg.linear.x = 0.1*self.direction
                 msg.angular.z = 0.0
                 self.get_logger().info("Avancement du robot\n")
           
@@ -250,7 +309,7 @@ class TopicsEx2Node(Node):
 
         elif self.etat == 3.0:
             msg.linear.x = 0.0
-            msg.angular.z = -0.2 * self.direction
+            msg.angular.z = -0.2*self.direction
             self.get_logger().info("Rotation\n")
             self.etatav = 3.0
             
@@ -271,8 +330,11 @@ class TopicsEx2Node(Node):
                     self.publisher_.publish(msg)
                     time.sleep(0.1)  # small delay to avoid spamming
                 self.etat = 2.0
-
+ 
+   
+        # Publication du message sur le topic
         self.publisher_.publish(msg)
+
 
     def odom_callback(self, msg):
         quaternion = msg.pose.pose.orientation
