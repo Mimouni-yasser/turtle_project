@@ -161,6 +161,10 @@ class TopicsEx2Node(Node):
                     if msg.num == self.next_digit:
                         #self.detected.append(msg.num)
                         #TODO ajouter logique de detection
+                        cmd.linear.x = 0
+                        cmd.angular.z = 0
+                        self.publisher_.publish(cmd)
+                        time.sleep(3)
                         self.current_digit = self.next_digit
                         self.i+=1
                         self.next_digit = f"['{self.i}']"
